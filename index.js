@@ -5,7 +5,7 @@ const socketIo = require('socket.io');
 const fs = require('fs-extra');
 const path = require('path');
 const axios = require('axios');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, jidNormalizedUser, Browsers, delay, downloadContentFromMessage, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, jidNormalizedUser, Browsers, delay } = require('@whiskeysockets/baileys');
 const P = require('pino');
 
 // =================== SETTINGS ===================
@@ -624,47 +624,8 @@ async function loadExistingSessions() {
     }
 }
 
-// =================== ADMIN PANEL SOCKET EVENTS ===================
-const adminPassword = process.env.ADMIN_PASSWORD || 'ma_admin';
-
+// =================== SOCKET.IO ===================
 io.on('connection', (socket) => {
-    socket.on('admin-auth', (password) => {
-        if (password === adminPassword) {
-            socket.authenticated = true;
-            socket.emit('admin-auth-success');
-        } else {
-            socket.emit('admin-auth-fail');
-        }
-    });
-
-    socket.on('get-stats', () => {
-        if (!socket.authenticated) return;
-        
-        const totalSessions = Object.keys(sessions).length;
-        const activeSessions = Object.values(sessions).filter(s => s.isConnected).length;
-        const totalUsers = Object.keys(botData.userNames || {}).length;
-
-        socket.emit('stats-data', {
-            totalSessions,
-            activeSessions,
-            totalUsers
-        });
-    });
-
-    socket.on('get-users', () => {
-        if (!socket.authenticated) return;
-        
-        const users = [];
-        for (const [sessionId, session] of Object.entries(sessions)) {
-            users.push({
-                sessionId,
-                number: session.phoneNumber || 'Not linked',
-                status: session.isConnected ? 'online' : session.sock ? 'connecting' : 'offline'
-            });
-        }
-        socket.emit('users-data', users);
-    });
-
     socket.on('set-user', (userId) => {
         userSockets[userId] = socket.id;
         if (!sessions[userId]) sessions[userId] = new BotSession(userId);
