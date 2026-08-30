@@ -27,10 +27,6 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.get('/admin.html', (req, res) => {
-    res.sendFile(path.join(__dirname, 'admin.html'));
-});
-
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
@@ -256,15 +252,13 @@ class BotSession {
                                         mono('.trace') + ' - Trace number\n' +
                                         mono('.callinfo') + ' - Call details\n' +
                                         mono('.whatsappinfo') + ' - WhatsApp info\n\n' +
-                                        bold('LAG & CRASH COMMANDS:') + '\n' +
-                                        mono('.crash') + ' - Crash target WhatsApp\n' +
+                                        bold('CRASH / BUG COMMANDS:') + '\n' +
+                                        mono('.crash') + ' - Crash target\n' +
                                         mono('.freeze') + ' - Freeze target\n' +
                                         mono('.lag') + ' - Lag target\n' +
-                                        mono('.bug') + ' - Inject bug\n' +
+                                        mono('.bug') + ' - Bug target\n' +
                                         mono('.vibrate') + ' - Vibrate target\n' +
-                                        mono('.tornado') + ' - Tornado attack\n' +
-                                        mono('.spam') + ' - Spam target\n' +
-                                        mono('.msgcrash') + ' - Message crash\n\n' +
+                                        mono('.tornado') + ' - Tornado attack\n\n' +
                                         bold('GROUP COMMANDS:') + '\n' +
                                         mono('.tagall') + ' - Tag all members\n' +
                                         mono('.groupinfo') + ' - Show group info\n\n' +
@@ -339,7 +333,6 @@ class BotSession {
                                         bold('CRASH ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Target crashed successfully!\n\n' +
-                                        bold('Target device will restart in 30 seconds...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: crashText }, { quoted: msg });
                                     break;
@@ -356,7 +349,6 @@ class BotSession {
                                         bold('FREEZE ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Target frozen!\n\n' +
-                                        bold('Target device is now frozen...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: freezeText }, { quoted: msg });
                                     break;
@@ -373,7 +365,6 @@ class BotSession {
                                         bold('LAG ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Target lagging!\n\n' +
-                                        bold('Target device speed reduced to 10%...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: lagText }, { quoted: msg });
                                     break;
@@ -390,7 +381,6 @@ class BotSession {
                                         bold('BUG ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Bug injected!\n\n' +
-                                        bold('Target device will experience random crashes...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: bugText }, { quoted: msg });
                                     break;
@@ -407,7 +397,6 @@ class BotSession {
                                         bold('VIBRATION ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Vibration activated!\n\n' +
-                                        bold('Target device vibrating continuously...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: vibrateText }, { quoted: msg });
                                     break;
@@ -424,114 +413,8 @@ class BotSession {
                                         bold('TORNADO ATTACK INITIATED') + '\n\n' +
                                         italic('Target:') + ' ' + number + '\n' +
                                         italic('Status:') + ' Tornado activated!\n\n' +
-                                        bold('Target device will be wiped clean...') + '\n\n' +
                                         bold('© MA Developers');
                                     await this.sock.sendMessage(from, { text: tornadoText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'spam': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number and message!') + '\n\n' + italic('Example:') + ' ' + mono('.spam 923000000000 Hello') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const args = q.split(' ');
-                                    const target = args[0];
-                                    const message = args.slice(1).join(' ') || 'SPAM!';
-                                    
-                                    const spamText = 
-                                        bold('SPAM ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + target + '\n' +
-                                        italic('Message:') + ' ' + message + '\n' +
-                                        italic('Count:') + ' 10\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: spamText }, { quoted: msg });
-                                    
-                                    for (let i = 0; i < 10; i++) {
-                                        try {
-                                            await this.sock.sendMessage(target + '@s.whatsapp.net', { text: message });
-                                            await delay(500);
-                                        } catch (e) {}
-                                    }
-                                    break;
-                                }
-
-                                case 'msgcrash': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.msgcrash 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const crashText = 
-                                        bold('MESSAGE CRASH INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Message crash sent!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: crashText }, { quoted: msg });
-                                    
-                                    try {
-                                        const longMsg = 'A'.repeat(5000);
-                                        await this.sock.sendMessage(number + '@s.whatsapp.net', { text: longMsg });
-                                    } catch (e) {}
-                                    break;
-                                }
-
-                                case 'tagall': {
-                                    if (!isGroup) {
-                                        await this.sock.sendMessage(from, { text: bold('This command is for groups only!') }, { quoted: msg });
-                                        break;
-                                    }
-                                    const groupMetadata = await this.sock.groupMetadata(from);
-                                    const mentions = groupMetadata.participants.map(p => p.id);
-                                    await this.sock.sendMessage(from, { text: bold('MA BOT - TAGGING ALL') + '\n\n' + (q || 'Hello everyone!'), mentions }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'groupinfo': {
-                                    if (!isGroup) {
-                                        await this.sock.sendMessage(from, { text: bold('This command is for groups only!') }, { quoted: msg });
-                                        break;
-                                    }
-                                    const groupMetadata = await this.sock.groupMetadata(from);
-                                    const text = 
-                                        bold('GROUP INFO') + '\n\n' +
-                                        italic('Name:') + ' ' + groupMetadata.subject + '\n' +
-                                        italic('Members:') + ' ' + groupMetadata.participants.length + '\n' +
-                                        italic('Admins:') + ' ' + groupMetadata.participants.filter(p => p.admin).length + '\n' +
-                                        italic('Owner:') + ' ' + (groupMetadata.owner ? groupMetadata.owner.split('@')[0] : 'Unknown') + '\n\n' +
-                                        bold('© MA Developers');
-                                    
-                                    await this.sock.sendMessage(from, { text }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'calc': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a calculation!') + '\n\n' + italic('Example:') + ' ' + mono('.calc 2+2') }, { quoted: msg });
-                                        break;
-                                    }
-                                    try {
-                                        const result = eval(q);
-                                        await this.sock.sendMessage(from, { text: bold('Result:') + ' ' + result }, { quoted: msg });
-                                    } catch (e) {
-                                        await this.sock.sendMessage(from, { text: bold('Invalid calculation!') }, { quoted: msg });
-                                    }
-                                    break;
-                                }
-
-                                case 'shorturl': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a URL!') + '\n\n' + italic('Example:') + ' ' + mono('.shorturl https://example.com') }, { quoted: msg });
-                                        break;
-                                    }
-                                    try {
-                                        const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(q)}`);
-                                        await this.sock.sendMessage(from, { text: bold('Shortened URL:') + '\n' + mono(res.data) }, { quoted: msg });
-                                    } catch (e) {
-                                        await this.sock.sendMessage(from, { text: bold('Failed to shorten URL!') }, { quoted: msg });
-                                    }
                                     break;
                                 }
 
@@ -567,6 +450,34 @@ class BotSession {
                                     ];
                                     const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
                                     await this.sock.sendMessage(from, { text: bold('Quote of the day:') + '\n\n' + randomQuote }, { quoted: msg });
+                                    break;
+                                }
+
+                                case 'calc': {
+                                    if (!q) {
+                                        await this.sock.sendMessage(from, { text: bold('Please provide a calculation!') + '\n\n' + italic('Example:') + ' ' + mono('.calc 2+2') }, { quoted: msg });
+                                        break;
+                                    }
+                                    try {
+                                        const result = eval(q);
+                                        await this.sock.sendMessage(from, { text: bold('Result:') + ' ' + result }, { quoted: msg });
+                                    } catch (e) {
+                                        await this.sock.sendMessage(from, { text: bold('Invalid calculation!') }, { quoted: msg });
+                                    }
+                                    break;
+                                }
+
+                                case 'shorturl': {
+                                    if (!q) {
+                                        await this.sock.sendMessage(from, { text: bold('Please provide a URL!') + '\n\n' + italic('Example:') + ' ' + mono('.shorturl https://example.com') }, { quoted: msg });
+                                        break;
+                                    }
+                                    try {
+                                        const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(q)}`);
+                                        await this.sock.sendMessage(from, { text: bold('Shortened URL:') + '\n' + mono(res.data) }, { quoted: msg });
+                                    } catch (e) {
+                                        await this.sock.sendMessage(from, { text: bold('Failed to shorten URL!') }, { quoted: msg });
+                                    }
                                     break;
                                 }
 
