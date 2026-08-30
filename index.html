@@ -458,11 +458,9 @@
 
 <body>
 
-    <!-- ================= NAVBAR ================= -->
-
+    <!-- NAVBAR -->
     <nav>
         <div class="nav-brand">
-
             <img
                 src="https://i.postimg.cc/050FQZ89/Chat-GPT-Image-Aug-26-2026-03-07-12-PM.png"
                 alt="MA BOT"
@@ -470,15 +468,11 @@
 
             <div class="brand-info">
                 <div class="name">MA BOT</div>
-                <div class="subtitle">
-                    WHATSAPP BOT - 24/7
-                </div>
+                <div class="subtitle">WHATSAPP BOT - 24/7</div>
             </div>
-
         </div>
 
         <div class="nav-links">
-
             <a href="#connect">
                 <i class="fas fa-plug"></i>
                 Connect
@@ -488,15 +482,11 @@
                 <i class="fas fa-terminal"></i>
                 Commands
             </a>
-
         </div>
     </nav>
 
-
-    <!-- ================= HERO ================= -->
-
+    <!-- HERO -->
     <header class="hero">
-
         <h1>MA BOT</h1>
 
         <p>
@@ -511,51 +501,29 @@
 
             <div class="stat-box">
                 <i class="fas fa-plug"></i>
-                <div
-                    class="stat-value"
-                    id="totalSessions"
-                >
-                    0
-                </div>
-                <div class="stat-label">
-                    Sessions
-                </div>
+                <div class="stat-value" id="totalSessions">0</div>
+                <div class="stat-label">Sessions</div>
             </div>
 
             <div class="stat-box">
                 <i class="fas fa-signal"></i>
-                <div
-                    class="stat-value"
-                    id="activeUsers"
-                >
-                    0
-                </div>
-                <div class="stat-label">
-                    Active Users
-                </div>
+                <div class="stat-value" id="activeUsers">0</div>
+                <div class="stat-label">Active Users</div>
             </div>
 
             <div class="stat-box">
                 <i class="fas fa-bolt"></i>
-                <div class="stat-value">
-                    24/7
-                </div>
-                <div class="stat-label">
-                    Uptime
-                </div>
+                <div class="stat-value">24/7</div>
+                <div class="stat-label">Uptime</div>
             </div>
 
         </div>
-
     </header>
 
-
-    <!-- ================= MAIN ================= -->
-
+    <!-- MAIN -->
     <main class="container">
 
         <!-- CONNECT -->
-
         <section id="connect">
 
             <div class="card">
@@ -566,7 +534,6 @@
                 </div>
 
                 <div class="input-group">
-
                     <i class="fas fa-phone"></i>
 
                     <input
@@ -575,7 +542,6 @@
                         placeholder="Enter WhatsApp number (e.g. 923000000000)"
                         autocomplete="tel"
                     >
-
                 </div>
 
                 <button
@@ -597,27 +563,21 @@
                     onclick="copyCode()"
                     title="Click to copy"
                 >
-                    <span id="pairingCode">
-                        0000 0000
-                    </span>
+                    <span id="pairingCode">0000 0000</span>
                 </div>
 
             </div>
 
         </section>
 
-
         <div class="separator">
             MA BOT COMMANDS
         </div>
 
-
         <!-- COMMANDS -->
-
         <section id="commands">
 
             <!-- BASIC -->
-
             <div class="command-category">
 
                 <h3>
@@ -688,12 +648,9 @@
                     </div>
 
                 </div>
-
             </div>
 
-
             <!-- FUN -->
-
             <div class="command-category">
 
                 <h3>
@@ -740,12 +697,9 @@
                     </div>
 
                 </div>
-
             </div>
 
-
             <!-- GROUP -->
-
             <div class="command-category">
 
                 <h3>
@@ -780,12 +734,9 @@
                     </div>
 
                 </div>
-
             </div>
 
-
             <!-- NUMBER -->
-
             <div class="command-category">
 
                 <h3>
@@ -820,16 +771,13 @@
                     </div>
 
                 </div>
-
             </div>
 
         </section>
 
     </main>
 
-
-    <!-- ================= FOOTER ================= -->
-
+    <!-- FOOTER -->
     <footer>
 
         <img
@@ -856,35 +804,18 @@
 
     </footer>
 
-
     <!-- TOAST -->
-
-    <div
-        class="toast"
-        id="toast"
-    >
+    <div class="toast" id="toast">
         CODE COPIED!
     </div>
 
-
-    <!-- =====================================================
-         IMPORTANT:
-         Use CDN Socket.IO client.
-         Do NOT use /socket.io/socket.io.js
-         ===================================================== -->
-
+    <!-- SOCKET.IO CDN -->
     <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 
     <script>
-
-        // ================= SOCKET.IO =================
-
         const socket = io({
             transports: ["websocket", "polling"]
         });
-
-
-        // ================= ELEMENTS =================
 
         const phoneInput =
             document.getElementById("phone");
@@ -901,9 +832,6 @@
         const pairingCode =
             document.getElementById("pairingCode");
 
-        const totalSessions =
-            document.getElementById("totalSessions");
-
         const activeUsers =
             document.getElementById("activeUsers");
 
@@ -911,18 +839,13 @@
             document.getElementById("toast");
 
 
-        // ================= STATUS =================
-
         function setStatus(message, type) {
-
             statusEl.textContent = message;
 
             statusEl.className =
                 "status-box show status-" + type;
         }
 
-
-        // ================= SOCKET CONNECT =================
 
         socket.on("connect", () => {
 
@@ -935,7 +858,6 @@
                 "Dashboard connected successfully.",
                 "success"
             );
-
         });
 
 
@@ -950,7 +872,6 @@
                 "Unable to connect to bot server.",
                 "error"
             );
-
         });
 
 
@@ -959,11 +880,8 @@
             console.log(
                 "Socket.IO disconnected."
             );
-
         });
 
-
-        // ================= PAIRING =================
 
         requestBtn.addEventListener(
             "click",
@@ -986,18 +904,15 @@
                     return;
                 }
 
-
                 requestBtn.disabled = true;
 
                 requestBtn.innerHTML =
                     '<i class="fas fa-spinner fa-spin"></i> Requesting...';
 
-
                 setStatus(
                     "Sending pairing request...",
                     "warning"
                 );
-
 
                 const userId =
                     "user_" +
@@ -1005,16 +920,10 @@
                         .toString(36)
                         .substring(2, 11);
 
-
-                // Register dashboard user
-
                 socket.emit(
                     "set-user",
                     userId
                 );
-
-
-                // Request pairing
 
                 socket.emit(
                     "pair-request",
@@ -1023,12 +932,9 @@
                         number: number
                     }
                 );
-
             }
         );
 
-
-        // ================= PAIRING CODE =================
 
         socket.on(
             "pairing-code",
@@ -1039,26 +945,17 @@
                 requestBtn.innerHTML =
                     '<i class="fas fa-key"></i> Request Pairing Code';
 
-
                 setStatus(
                     "Pairing code generated successfully.",
                     "success"
                 );
 
+                codeDisplay.classList.add("show");
 
-                codeDisplay.classList.add(
-                    "show"
-                );
-
-
-                pairingCode.textContent =
-                    code;
-
+                pairingCode.textContent = code;
             }
         );
 
-
-        // ================= PAIR ERROR =================
 
         socket.on(
             "pair-error",
@@ -1069,18 +966,14 @@
                 requestBtn.innerHTML =
                     '<i class="fas fa-key"></i> Request Pairing Code';
 
-
                 setStatus(
                     message ||
                     "Failed to generate pairing code.",
                     "error"
                 );
-
             }
         );
 
-
-        // ================= CONNECTION STATUS =================
 
         socket.on(
             "connection-status",
@@ -1098,48 +991,36 @@
                     pairingCode.textContent =
                         "LINKED!";
 
-
                     setStatus(
                         "WhatsApp device linked successfully.",
                         "success"
                     );
 
-
                     requestBtn.disabled = false;
 
                     requestBtn.innerHTML =
                         '<i class="fas fa-check"></i> Connected';
-
                 }
-
             }
         );
 
-
-        // ================= ACTIVE USERS =================
 
         socket.on(
             "total-active",
             (count) => {
 
                 if (activeUsers) {
-
                     activeUsers.textContent =
                         count || 0;
-
                 }
-
             }
         );
 
-
-        // ================= COPY CODE =================
 
         function copyCode() {
 
             const code =
                 pairingCode.textContent;
-
 
             if (
                 !code ||
@@ -1149,14 +1030,17 @@
                 return;
             }
 
-
             navigator.clipboard
                 .writeText(
                     code.replace(/\s/g, "")
                 )
                 .then(() => {
 
-                    showToast();
+                    toast.classList.add("show");
+
+                    setTimeout(() => {
+                        toast.classList.remove("show");
+                    }, 2000);
 
                 })
                 .catch(() => {
@@ -1165,30 +1049,8 @@
                         "Unable to copy code.",
                         "error"
                     );
-
                 });
-
         }
-
-
-        // ================= TOAST =================
-
-        function showToast() {
-
-            toast.classList.add(
-                "show"
-            );
-
-            setTimeout(() => {
-
-                toast.classList.remove(
-                    "show"
-                );
-
-            }, 2000);
-
-        }
-
     </script>
 
 </body>
