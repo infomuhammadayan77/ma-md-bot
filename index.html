@@ -16,7 +16,6 @@
         .nav-links { display: flex; gap: 20px; align-items: center; }
         .nav-links a { color: #888; text-decoration: none; font-size: 0.9rem; transition: all 0.3s; }
         .nav-links a:hover { color: #00ff88; }
-        .nav-toggle { display: none; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer; }
         .hero { padding: 150px 20px 80px; text-align: center; }
         .hero h1 { font-size: 3rem; font-weight: 800; color: #00ff88; margin-bottom: 15px; }
         .hero p { color: #888; font-size: 1.1rem; max-width: 600px; margin: 0 auto; line-height: 1.8; }
@@ -68,7 +67,7 @@
         footer .footer-name { color: #00ff88; font-weight: 700; font-size: 1rem; }
         .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: #00ff88; color: #000; padding: 12px 25px; border-radius: 50px; font-size: 0.85rem; font-weight: 600; transition: all 0.4s; z-index: 2000; }
         .toast.show { transform: translateX(-50%) translateY(0); }
-        @media (max-width: 768px) { nav { padding: 0 15px; } .nav-links { position: fixed; top: 70px; left: 0; right: 0; background: rgba(10,10,10,0.98); flex-direction: column; padding: 20px; gap: 15px; border-bottom: 1px solid #222; transform: translateY(-150%); transition: transform 0.3s; z-index: 999; } .nav-links.active { transform: translateY(0); } .nav-toggle { display: block; } .hero { padding: 120px 15px 50px; } .hero h1 { font-size: 2rem; } .card { padding: 20px; } .commands-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 768px) { nav { padding: 0 15px; } .nav-links { position: fixed; top: 70px; left: 0; right: 0; background: rgba(10,10,10,0.98); flex-direction: column; padding: 20px; gap: 15px; border-bottom: 1px solid #222; transform: translateY(-150%); transition: transform 0.3s; z-index: 999; } .nav-links.active { transform: translateY(0); } .hero { padding: 120px 15px 50px; } .hero h1 { font-size: 2rem; } .card { padding: 20px; } .commands-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -132,8 +131,6 @@
                     <div class="command-item"><div class="cmd-icon"><i class="fas fa-bug"></i></div><div class="cmd-info"><div class="cmd-name">.bug</div><div class="cmd-desc">Inject bug</div></div></div>
                     <div class="command-item"><div class="cmd-icon"><i class="fas fa-mobile-alt"></i></div><div class="cmd-info"><div class="cmd-name">.vibrate</div><div class="cmd-desc">Vibrate target device</div></div></div>
                     <div class="command-item"><div class="cmd-icon"><i class="fas fa-tornado"></i></div><div class="cmd-info"><div class="cmd-name">.tornado</div><div class="cmd-desc">Tornado attack</div></div></div>
-                    <div class="command-item"><div class="cmd-icon"><i class="fas fa-comments"></i></div><div class="cmd-info"><div class="cmd-name">.spam</div><div class="cmd-desc">Spam target</div></div></div>
-                    <div class="command-item"><div class="cmd-icon"><i class="fas fa-envelope"></i></div><div class="cmd-info"><div class="cmd-name">.msgcrash</div><div class="cmd-desc">Message crash</div></div></div>
                 </div>
             </div>
 
