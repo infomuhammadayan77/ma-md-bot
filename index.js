@@ -1,11 +1,23 @@
 require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
+const { Server } = require('socket.io');
 const fs = require('fs-extra');
 const path = require('path');
 const axios = require('axios');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, jidNormalizedUser, Browsers, delay } = require('@whiskeysockets/baileys');
+
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    jidNormalizedUser,
+    Browsers,
+    delay
+} = require('@whiskeysockets/baileys');
+
 const P = require('pino');
 
 // =================== SETTINGS ===================
@@ -14,19 +26,23 @@ const settings = require('./settings');
 // =================== EXPRESS SETUP ===================
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-    cors: { origin: "*" },
+
+const io = new Server(server, {
+    cors: {
+        origin: '*',
+        methods: ['GET', 'POST']
+    },
     transports: ['websocket', 'polling']
 });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname)));
 
-// Socket.IO client script serve karein
-app.get('/socket.io/socket.io.js', (req, res) => {
-    res.sendFile(path.join(__dirname, 'node_modules/socket.io/client-dist/socket.io.js'));
-});
+// Serve dashboard/static files
+app.use(express.static(__dirname));
+
+// Socket.IO automatically serves:
+// /socket.io/socket.io.js
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -36,543 +52,1731 @@ app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
 
-// =================== DATA STORAGE ===================
-const AUTH_DIR = './auth_info';
-const DATA_FILE = './data/bot_data.json';
-fs.ensureDirSync(AUTH_DIR);
-fs.ensureDirSync('./data');
+app.get('/api/status', (req, res) => {
+    const activeSessions = Object.values(sessions)
+        .filter(session => session.isConnected)
+        .length;
 
-let botData = { 
-    antilinkGroups: {}, 
-    totalBots: 0, 
-    registeredBots: [], 
-    statusSettings: {}, 
-    antiDelete: {}, 
-    userNames: {}, 
-    antiCall: {}, 
-    broadcastHistory: [] 
+    res.json({
+        status: 'online',
+        version: settings.version,
+        activeBots: activeSessions,
+        uptime: process.uptime()
+    });
+});
+
+// =================== DATA STORAGE ===================
+
+const AUTH_DIR = path.join(__dirname, 'auth_info');
+const DATA_DIR = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'bot_data.json');
+
+fs.ensureDirSync(AUTH_DIR);
+fs.ensureDirSync(DATA_DIR);
+
+let botData = {
+    antilinkGroups: {},
+    totalBots: 0,
+    registeredBots: [],
+    statusSettings: {},
+    antiDelete: {},
+    userNames: {},
+    antiCall: {},
+    broadcastHistory: []
 };
 
 if (fs.existsSync(DATA_FILE)) {
-    try { botData = fs.readJsonSync(DATA_FILE); } catch (e) {}
+    try {
+        const savedData = fs.readJsonSync(DATA_FILE);
+
+        botData = {
+            ...botData,
+            ...savedData
+        };
+    } catch (error) {
+        console.log('[DATA] Could not read bot_data.json');
+    }
 }
 
 function saveBotData() {
-    fs.writeJsonSync(DATA_FILE, botData);
+    try {
+        fs.writeJsonSync(DATA_FILE, botData, {
+            spaces: 2
+        });
+    } catch (error) {
+        console.error('[DATA] Save error:', error.message);
+    }
 }
 
-const sessions = {}; 
-const userSockets = {}; 
-const messageLogs = {}; 
+// =================== GLOBAL STATE ===================
 
-// =================== FORMATTING HELPERS ===================
-const bold = (text) => `*${text}*`;
-const italic = (text) => `_${text}_`;
-const mono = (text) => `\`${text}\``;
+const sessions = {};
+const userSockets = {};
+const messageLogs = {};
+
+// =================== FORMATTING ===================
+
+const bold = text => `*${text}*`;
+const italic = text => `_${text}_`;
+const mono = text => `\`${text}\``;
 
 // =================== BOT SESSION CLASS ===================
+
 class BotSession {
+
     constructor(userId) {
         this.userId = userId;
         this.sock = null;
         this.isConnected = false;
         this.aiEnabled = false;
         this.isPublic = true;
+
         this.authPath = path.join(AUTH_DIR, userId);
+
         this.processedMessages = new Set();
+
         this.phoneNumber = null;
         this.tgChatId = null;
+        this.initializing = false;
     }
 
+    // =================== LOGGING ===================
+
     sendLog(message, type = 'info') {
-        const logEntry = { timestamp: new Date().toLocaleTimeString(), message, type };
+
+        const logEntry = {
+            timestamp: new Date().toLocaleTimeString(),
+            message,
+            type
+        };
+
         const socketId = userSockets[this.userId];
-        if (socketId) io.to(socketId).emit('console', logEntry);
+
+        if (socketId) {
+            io.to(socketId).emit('console', logEntry);
+        }
+
         console.log(`[${this.userId}] ${message}`);
     }
 
+    // =================== STATUS ===================
+
     sendConnectionStatus() {
+
         const socketId = userSockets[this.userId];
+
         if (socketId) {
+
             io.to(socketId).emit('connection-status', {
                 connected: this.isConnected,
-                user: this.userId
+                user: this.userId,
+                phoneNumber: this.phoneNumber
             });
         }
-        io.emit('total-active', Object.values(sessions).filter(s => s.isConnected).length);
+
+        io.emit(
+            'total-active',
+            Object.values(sessions)
+                .filter(session => session.isConnected)
+                .length
+        );
     }
 
+    // =================== AI ===================
+
     async getAIResponse(userMessage) {
+
         try {
-            const apiUrl = `https://api.siputzx.my.id/api/ai/chatgpt?text=${encodeURIComponent(userMessage)}`;
-            const response = await axios.get(apiUrl);
+
+            const apiUrl =
+                `https://api.siputzx.my.id/api/ai/chatgpt?text=${encodeURIComponent(userMessage)}`;
+
+            const response = await axios.get(apiUrl, {
+                timeout: 30000
+            });
+
             if (response.data && response.data.data) {
                 return response.data.data;
             }
-            return "I'm here to help! What would you like to know?";
+
+            return 'I am here to help! What would you like to know?';
+
         } catch (error) {
-            return "Sorry, I'm having trouble connecting to AI services right now.";
+
+            console.error('[AI ERROR]', error.message);
+
+            return 'Sorry, AI service is currently unavailable.';
         }
     }
 
+    // =================== INITIALIZE ===================
+
     async initialize(pairingNumber = null) {
+
+        if (this.initializing) {
+            return;
+        }
+
+        this.initializing = true;
+
         try {
+
+            await fs.ensureDir(this.authPath);
+
             const { version } = await fetchLatestBaileysVersion();
-            const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
+
+            const {
+                state,
+                saveCreds
+            } = await useMultiFileAuthState(this.authPath);
 
             this.sock = makeWASocket({
+
                 version,
+
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'fatal' })),
+
+                    keys: makeCacheableSignalKeyStore(
+                        state.keys,
+                        P({
+                            level: 'fatal'
+                        })
+                    )
                 },
+
                 printQRInTerminal: false,
-                logger: P({ level: 'fatal' }),
+
+                logger: P({
+                    level: 'fatal'
+                }),
+
                 browser: Browsers.ubuntu('Chrome'),
+
                 syncFullHistory: false,
+
                 markOnlineOnConnect: true,
+
                 connectTimeoutMs: 60000,
-                defaultQueryTimeoutMs: 60000,
+
+                defaultQueryTimeoutMs: 60000
             });
 
-            if (pairingNumber && !state.creds.registered) {
-                if (!this.sock.authState.creds.registered) {
-                    await delay(3000);
-                    try {
-                        let code = await this.sock.requestPairingCode(pairingNumber);
-                        code = code?.match(/.{1,4}/g)?.join("-") || code;
-                        this.sendLog(`Pairing Code: ${code}`, 'success');
+            this.sock.ev.on(
+                'creds.update',
+                saveCreds
+            );
 
-                        const socketId = userSockets[this.userId];
-                        if (socketId) io.to(socketId).emit('pairing-code', code);
-                    } catch (err) {
-                        this.sendLog(`Pairing error: ${err.message}`, 'error');
+            // =================== PAIRING CODE ===================
+
+            if (
+                pairingNumber &&
+                !state.creds.registered
+            ) {
+
+                await delay(3000);
+
+                try {
+
+                    let code =
+                        await this.sock.requestPairingCode(
+                            pairingNumber
+                        );
+
+                    if (code) {
+
+                        code =
+                            code
+                                .match(/.{1,4}/g)
+                                ?.join('-') || code;
                     }
+
+                    this.sendLog(
+                        `Pairing Code: ${code}`,
+                        'success'
+                    );
+
+                    const socketId =
+                        userSockets[this.userId];
+
+                    if (socketId) {
+
+                        io.to(socketId).emit(
+                            'pairing-code',
+                            code
+                        );
+                    }
+
+                } catch (error) {
+
+                    this.sendLog(
+                        `Pairing error: ${error.message}`,
+                        'error'
+                    );
                 }
             }
 
-            this.sock.ev.on('creds.update', saveCreds);
+            // =================== CONNECTION ===================
 
-            this.sock.ev.on('connection.update', async (update) => {
-                const { connection, lastDisconnect, qr } = update;
-                
-                if (qr) {
-                    const socketId = userSockets[this.userId];
-                    if (socketId) io.to(socketId).emit('qr', qr);
-                }
+            this.sock.ev.on(
+                'connection.update',
+                async update => {
 
-                if (connection === 'close') {
-                    const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                    this.isConnected = false;
-                    this.sendLog(`Connection closed. Reconnecting: ${shouldReconnect}`, 'warning');
-                    this.sendConnectionStatus();
-                    
-                    const statusCode = (lastDisconnect.error)?.output?.statusCode;
-                    
-                    if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                        this.sendLog('Session expired or logged out.', 'error');
-                        delete sessions[this.userId];
-                        this.sendConnectionStatus();
-                    } else {
-                        setTimeout(() => this.initialize(), 5000);
+                    const {
+                        connection,
+                        lastDisconnect,
+                        qr
+                    } = update;
+
+                    // QR
+                    if (qr) {
+
+                        const socketId =
+                            userSockets[this.userId];
+
+                        if (socketId) {
+
+                            io.to(socketId).emit(
+                                'qr',
+                                qr
+                            );
+                        }
                     }
-                } else if (connection === 'open') {
-                    this.isConnected = true;
-                    this.sendLog('Connected successfully!', 'success');
-                    this.sendConnectionStatus();
 
-                    const botNumber = jidNormalizedUser(this.sock.user.id);
-                    const botNumberClean = botNumber.split('@')[0];
-                    this.phoneNumber = botNumberClean;
+                    // CONNECTION CLOSED
+                    if (connection === 'close') {
 
-                    const welcomeText = 
-                        bold('MA BOT') + '\n\n' +
-                        bold('CONNECTED SUCCESSFULLY') + '\n\n' +
-                        bold('Bot Information:') + '\n' +
-                        italic('Bot Name:') + ' MA BOT\n' +
-                        italic('Developer:') + ' MA Developers\n' +
-                        italic('Founder:') + ' Muhammad Ayan\n' +
-                        italic('Version:') + ' ' + settings.version + '\n' +
-                        italic('Status:') + ' 24/7 Active\n\n' +
-                        'Type ' + mono('.menu') + ' to explore all features.\n\n' +
-                        bold('© MA Developers | Muhammad Ayan');
+                        this.isConnected = false;
 
-                    await this.sock.sendMessage(botNumber, { 
-                        image: { url: settings.startimage },
-                        caption: welcomeText 
-                    });
+                        const statusCode =
+                            lastDisconnect?.error
+                                ?.output
+                                ?.statusCode;
+
+                        const shouldReconnect =
+                            statusCode !==
+                            DisconnectReason.loggedOut;
+
+                        this.sendLog(
+                            `Connection closed. Reconnecting: ${shouldReconnect}`,
+                            'warning'
+                        );
+
+                        this.sendConnectionStatus();
+
+                        if (
+                            statusCode ===
+                                DisconnectReason.loggedOut ||
+                            statusCode === 401
+                        ) {
+
+                            this.sendLog(
+                                'Session logged out.',
+                                'error'
+                            );
+
+                            delete sessions[this.userId];
+
+                            this.sendConnectionStatus();
+
+                        } else {
+
+                            setTimeout(() => {
+
+                                this.initialize()
+                                    .catch(error => {
+
+                                        console.error(
+                                            `[${this.userId}] Reconnect error:`,
+                                            error.message
+                                        );
+                                    });
+
+                            }, 5000);
+                        }
+                    }
+
+                    // CONNECTION OPEN
+                    else if (connection === 'open') {
+
+                        this.isConnected = true;
+
+                        this.sendLog(
+                            'Connected successfully!',
+                            'success'
+                        );
+
+                        this.sendConnectionStatus();
+
+                        if (this.sock.user) {
+
+                            const botNumber =
+                                jidNormalizedUser(
+                                    this.sock.user.id
+                                );
+
+                            const botNumberClean =
+                                botNumber.split('@')[0];
+
+                            this.phoneNumber =
+                                botNumberClean;
+
+                            const welcomeText =
+                                bold('MA BOT') +
+                                '\n\n' +
+
+                                bold('CONNECTED SUCCESSFULLY') +
+                                '\n\n' +
+
+                                bold('Bot Information:') +
+                                '\n' +
+
+                                italic('Bot Name:') +
+                                ' MA BOT\n' +
+
+                                italic('Developer:') +
+                                ' MA Developers\n' +
+
+                                italic('Founder:') +
+                                ' Muhammad Ayan\n' +
+
+                                italic('Version:') +
+                                ` ${settings.version}\n` +
+
+                                italic('Status:') +
+                                ' 24/7 Active\n\n' +
+
+                                'Type ' +
+                                mono('.menu') +
+                                ' to explore all features.\n\n' +
+
+                                bold(
+                                    '© MA Developers | Muhammad Ayan'
+                                );
+
+                            try {
+
+                                if (settings.startimage) {
+
+                                    await this.sock.sendMessage(
+                                        botNumber,
+                                        {
+                                            image: {
+                                                url: settings.startimage
+                                            },
+                                            caption: welcomeText
+                                        }
+                                    );
+
+                                } else {
+
+                                    await this.sock.sendMessage(
+                                        botNumber,
+                                        {
+                                            text: welcomeText
+                                        }
+                                    );
+                                }
+
+                            } catch (error) {
+
+                                console.error(
+                                    '[WELCOME ERROR]',
+                                    error.message
+                                );
+                            }
+                        }
+                    }
                 }
-            });
+            );
 
-            this.sock.ev.on('messages.upsert', async (m) => {
-                console.log('Message received:', m.type);
-                
-                if (m.type !== 'notify') return;
+            // =================== MESSAGES ===================
 
-                for (const msg of m.messages) {
-                    try {
-                        const from = msg.key.remoteJid;
-                        const isMe = msg.key.fromMe;
-                        const isGroup = from.endsWith('@g.us');
-                        const isStatus = from === 'status@broadcast';
+            this.sock.ev.on(
+                'messages.upsert',
+                async m => {
 
-                        const messageContent = msg.message?.ephemeralMessage?.message || msg.message?.viewOnceMessage?.message || msg.message?.viewOnceMessageV2?.message || msg.message;
-                        if (!messageContent) continue;
+                    if (m.type !== 'notify') {
+                        return;
+                    }
 
-                        const text = (messageContent.conversation || messageContent.extendedTextMessage?.text || messageContent.imageMessage?.caption || messageContent.videoMessage?.caption || '').trim();
+                    for (const msg of m.messages) {
 
-                        if (isStatus) continue;
+                        try {
 
-                        const msgId = msg.key.id;
-                        if (this.processedMessages.has(msgId)) continue;
-                        this.processedMessages.add(msgId);
-                        if (this.processedMessages.size > 1000) this.processedMessages.delete(this.processedMessages.values().next().value);
+                            const from =
+                                msg.key.remoteJid;
 
-                        // =================== COMMAND PROCESSING ===================
-                        if (text.toLowerCase().startsWith('.')) {
-                            const cmd = text.toLowerCase();
-                            const args = text.split(' ').slice(1);
-                            const q = args.join(' ');
-                            const commandName = cmd.slice(1).split(' ')[0];
+                            if (!from) {
+                                continue;
+                            }
 
-                            const botNumber = jidNormalizedUser(this.sock.user.id);
-                            const botNumberClean = botNumber.split('@')[0];
-                            const sender = msg.key.participant || from;
-                            const senderClean = sender.split('@')[0];
+                            const isMe =
+                                msg.key.fromMe;
 
-                            const ownerNumbers = String(settings.ownerNumber).split(',').map(n => n.replace(/\D/g, ''));
-                            const isOwner = isMe || ownerNumbers.some(on => senderClean === on) || senderClean === botNumberClean;
+                            const isGroup =
+                                from.endsWith('@g.us');
+
+                            const isStatus =
+                                from ===
+                                'status@broadcast';
+
+                            if (isStatus) {
+                                continue;
+                            }
+
+                            const messageContent =
+                                msg.message
+                                    ?.ephemeralMessage
+                                    ?.message ||
+
+                                msg.message
+                                    ?.viewOnceMessage
+                                    ?.message ||
+
+                                msg.message
+                                    ?.viewOnceMessageV2
+                                    ?.message ||
+
+                                msg.message;
+
+                            if (!messageContent) {
+                                continue;
+                            }
+
+                            const text =
+                                (
+                                    messageContent.conversation ||
+
+                                    messageContent
+                                        .extendedTextMessage
+                                        ?.text ||
+
+                                    messageContent
+                                        .imageMessage
+                                        ?.caption ||
+
+                                    messageContent
+                                        .videoMessage
+                                        ?.caption ||
+
+                                    ''
+                                ).trim();
+
+                            if (!text) {
+                                continue;
+                            }
+
+                            const msgId =
+                                msg.key.id;
+
+                            if (!msgId) {
+                                continue;
+                            }
+
+                            if (
+                                this.processedMessages
+                                    .has(msgId)
+                            ) {
+                                continue;
+                            }
+
+                            this.processedMessages
+                                .add(msgId);
+
+                            if (
+                                this.processedMessages
+                                    .size > 1000
+                            ) {
+
+                                const first =
+                                    this.processedMessages
+                                        .values()
+                                        .next()
+                                        .value;
+
+                                this.processedMessages
+                                    .delete(first);
+                            }
+
+                            // ================= COMMAND =================
+
+                            if (
+                                !text
+                                    .toLowerCase()
+                                    .startsWith('.')
+                            ) {
+                                continue;
+                            }
+
+                            const args =
+                                text
+                                    .trim()
+                                    .split(/\s+/)
+                                    .slice(1);
+
+                            const q =
+                                args.join(' ');
+
+                            const commandName =
+                                text
+                                    .trim()
+                                    .slice(1)
+                                    .split(/\s+/)[0]
+                                    .toLowerCase();
+
+                            const botNumber =
+                                jidNormalizedUser(
+                                    this.sock.user.id
+                                );
+
+                            const botNumberClean =
+                                botNumber.split('@')[0];
+
+                            const sender =
+                                msg.key.participant ||
+                                from;
+
+                            const senderClean =
+                                sender.split('@')[0];
+
+                            const ownerNumbers =
+                                String(
+                                    settings.ownerNumber || ''
+                                )
+                                    .split(',')
+                                    .map(n =>
+                                        n.replace(/\D/g, '')
+                                    )
+                                    .filter(Boolean);
+
+                            const isOwner =
+                                isMe ||
+                                ownerNumbers.includes(
+                                    senderClean
+                                ) ||
+                                senderClean ===
+                                    botNumberClean;
+
+                            // ================= COMMAND SWITCH =================
 
                             switch (commandName) {
+
+                                // ================= MENU =================
+
                                 case 'menu': {
-                                    const menuText = 
-                                        bold('MA BOT MENU') + '\n\n' +
-                                        bold('SYSTEM COMMANDS:') + '\n' +
-                                        mono('.ping') + ' - Check bot response\n' +
-                                        mono('.uptime') + ' - Show uptime\n' +
-                                        mono('.stats') + ' - Show bot stats\n\n' +
-                                        bold('SIM & NUMBER INFO:') + '\n' +
-                                        mono('.siminfo') + ' - SIM card info\n' +
-                                        mono('.numberinfo') + ' - Number details\n' +
-                                        mono('.trace') + ' - Trace number\n' +
-                                        mono('.callinfo') + ' - Call details\n' +
-                                        mono('.whatsappinfo') + ' - WhatsApp info\n\n' +
-                                        bold('CRASH / BUG COMMANDS:') + '\n' +
-                                        mono('.crash') + ' - Crash target\n' +
-                                        mono('.freeze') + ' - Freeze target\n' +
-                                        mono('.lag') + ' - Lag target\n' +
-                                        mono('.bug') + ' - Bug target\n' +
-                                        mono('.vibrate') + ' - Vibrate target\n' +
-                                        mono('.tornado') + ' - Tornado attack\n\n' +
-                                        bold('GROUP COMMANDS:') + '\n' +
-                                        mono('.tagall') + ' - Tag all members\n' +
-                                        mono('.groupinfo') + ' - Show group info\n\n' +
-                                        bold('TOOLS COMMANDS:') + '\n' +
-                                        mono('.calc') + ' - Calculator\n' +
-                                        mono('.shorturl') + ' - Shorten URL\n\n' +
-                                        bold('FUN COMMANDS:') + '\n' +
-                                        mono('.joke') + ' - Random joke\n' +
-                                        mono('.fact') + ' - Random fact\n' +
-                                        mono('.quote') + ' - Random quote\n\n' +
+
+                                    const menuText =
+
+                                        bold('MA BOT MENU') +
+                                        '\n\n' +
+
+                                        bold('SYSTEM COMMANDS:') +
+                                        '\n' +
+
+                                        mono('.ping') +
+                                        ' - Check bot response\n' +
+
+                                        mono('.uptime') +
+                                        ' - Show uptime\n' +
+
+                                        mono('.stats') +
+                                        ' - Show bot stats\n\n' +
+
+                                        bold('AI COMMAND:') +
+                                        '\n' +
+
+                                        mono('.ai <message>') +
+                                        ' - AI assistant\n\n' +
+
+                                        bold('TOOLS COMMANDS:') +
+                                        '\n' +
+
+                                        mono('.calc 2+2') +
+                                        ' - Calculator\n' +
+
+                                        mono('.shorturl URL') +
+                                        ' - Shorten URL\n\n' +
+
+                                        bold('FUN COMMANDS:') +
+                                        '\n' +
+
+                                        mono('.joke') +
+                                        ' - Random joke\n' +
+
+                                        mono('.fact') +
+                                        ' - Random fact\n' +
+
+                                        mono('.quote') +
+                                        ' - Random quote\n\n' +
+
+                                        bold('GROUP COMMANDS:') +
+                                        '\n' +
+
+                                        mono('.groupinfo') +
+                                        ' - Group information\n' +
+
+                                        mono('.tagall') +
+                                        ' - Tag group members\n\n' +
+
                                         bold('© MA Developers');
-                                    
+
                                     try {
-                                        await this.sock.sendMessage(from, { image: { url: settings.startimage }, caption: menuText }, { quoted: msg });
-                                    } catch (e) {
-                                        await this.sock.sendMessage(from, { text: menuText }, { quoted: msg });
+
+                                        if (
+                                            settings.startimage
+                                        ) {
+
+                                            await this.sock
+                                                .sendMessage(
+                                                    from,
+                                                    {
+                                                        image: {
+                                                            url:
+                                                                settings.startimage
+                                                        },
+                                                        caption:
+                                                            menuText
+                                                    },
+                                                    {
+                                                        quoted: msg
+                                                    }
+                                                );
+
+                                        } else {
+
+                                            await this.sock
+                                                .sendMessage(
+                                                    from,
+                                                    {
+                                                        text:
+                                                            menuText
+                                                    },
+                                                    {
+                                                        quoted: msg
+                                                    }
+                                                );
+                                        }
+
+                                    } catch (error) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        menuText
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
                                     }
+
                                     break;
                                 }
+
+                                // ================= PING =================
 
                                 case 'ping': {
-                                    const start = Date.now();
-                                    await this.sock.sendMessage(from, { text: bold('Pong!') + '\n\n' + italic('Response time:') + ' ' + (Date.now() - start) + 'ms' }, { quoted: msg });
+
+                                    const start =
+                                        Date.now();
+
+                                    const responseTime =
+                                        Date.now() -
+                                        start;
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold('Pong!') +
+                                                    '\n\n' +
+
+                                                    italic(
+                                                        'Response time:'
+                                                    ) +
+                                                    ` ${responseTime}ms`
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
                                     break;
                                 }
+
+                                // ================= UPTIME =================
 
                                 case 'uptime': {
-                                    const uptime = process.uptime();
-                                    const days = Math.floor(uptime / 86400);
-                                    const hours = Math.floor((uptime % 86400) / 3600);
-                                    const minutes = Math.floor((uptime % 3600) / 60);
-                                    const seconds = Math.floor(uptime % 60);
-                                    
-                                    const text = 
-                                        bold('MA BOT UPTIME') + '\n\n' +
-                                        italic('Days:') + ' ' + days + '\n' +
-                                        italic('Hours:') + ' ' + hours + '\n' +
-                                        italic('Minutes:') + ' ' + minutes + '\n' +
-                                        italic('Seconds:') + ' ' + seconds + '\n\n' +
-                                        bold('© MA Developers');
-                                    
-                                    await this.sock.sendMessage(from, { text }, { quoted: msg });
+
+                                    const uptime =
+                                        process.uptime();
+
+                                    const days =
+                                        Math.floor(
+                                            uptime / 86400
+                                        );
+
+                                    const hours =
+                                        Math.floor(
+                                            (uptime % 86400) /
+                                            3600
+                                        );
+
+                                    const minutes =
+                                        Math.floor(
+                                            (uptime % 3600) /
+                                            60
+                                        );
+
+                                    const seconds =
+                                        Math.floor(
+                                            uptime % 60
+                                        );
+
+                                    const uptimeText =
+
+                                        bold(
+                                            'MA BOT UPTIME'
+                                        ) +
+                                        '\n\n' +
+
+                                        italic('Days:') +
+                                        ` ${days}\n` +
+
+                                        italic('Hours:') +
+                                        ` ${hours}\n` +
+
+                                        italic('Minutes:') +
+                                        ` ${minutes}\n` +
+
+                                        italic('Seconds:') +
+                                        ` ${seconds}\n\n` +
+
+                                        bold(
+                                            '© MA Developers'
+                                        );
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    uptimeText
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
                                     break;
                                 }
 
-                                case 'siminfo': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.siminfo 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const simInfoText = 
-                                        bold('SIM CARD INFORMATION') + '\n\n' +
-                                        italic('Phone Number:') + ' ' + number + '\n' +
-                                        italic('Country:') + ' Pakistan\n' +
-                                        italic('Operator:') + ' Jazz / Warid / Zong / Telenor\n' +
-                                        italic('Status:') + ' Active\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: simInfoText }, { quoted: msg });
+                                // ================= STATS =================
+
+                                case 'stats': {
+
+                                    const activeBots =
+                                        Object.values(
+                                            sessions
+                                        )
+                                            .filter(
+                                                s =>
+                                                    s.isConnected
+                                            )
+                                            .length;
+
+                                    const statsText =
+
+                                        bold(
+                                            'MA BOT STATS'
+                                        ) +
+                                        '\n\n' +
+
+                                        italic(
+                                            'Version:'
+                                        ) +
+                                        ` ${settings.version}\n` +
+
+                                        italic(
+                                            'Active Bots:'
+                                        ) +
+                                        ` ${activeBots}\n` +
+
+                                        italic(
+                                            'Current Bot:'
+                                        ) +
+                                        ` ${this.phoneNumber || 'Unknown'}\n\n` +
+
+                                        bold(
+                                            '© MA Developers'
+                                        );
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    statsText
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
                                     break;
                                 }
 
-                                case 'crash': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.crash 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const crashText = 
-                                        bold('CRASH ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Target crashed successfully!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: crashText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'freeze': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.freeze 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const freezeText = 
-                                        bold('FREEZE ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Target frozen!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: freezeText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'lag': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.lag 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const lagText = 
-                                        bold('LAG ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Target lagging!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: lagText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'bug': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.bug 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const bugText = 
-                                        bold('BUG ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Bug injected!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: bugText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'vibrate': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.vibrate 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const vibrateText = 
-                                        bold('VIBRATION ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Vibration activated!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: vibrateText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'tornado': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a phone number!') + '\n\n' + italic('Example:') + ' ' + mono('.tornado 923000000000') }, { quoted: msg });
-                                        break;
-                                    }
-                                    
-                                    const number = q.replace(/\D/g, '');
-                                    const tornadoText = 
-                                        bold('TORNADO ATTACK INITIATED') + '\n\n' +
-                                        italic('Target:') + ' ' + number + '\n' +
-                                        italic('Status:') + ' Tornado activated!\n\n' +
-                                        bold('© MA Developers');
-                                    await this.sock.sendMessage(from, { text: tornadoText }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'joke': {
-                                    const jokes = [
-                                        'Why do programmers prefer dark mode? Because light attracts bugs!',
-                                        'Why did the developer go broke? Because he used up all his cache!',
-                                        'Why do Java developers wear glasses? Because they don\'t C#!',
-                                        'Why did the computer go to the doctor? It caught a virus!'
-                                    ];
-                                    const randomJoke = jokes[Math.floor(Math.random() * jokes.length)];
-                                    await this.sock.sendMessage(from, { text: bold('Here\'s a joke:') + '\n\n' + randomJoke }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'fact': {
-                                    const facts = [
-                                        'Honey never spoils. Archaeologists have found 3000-year-old honey in Egyptian tombs!',
-                                        'The human brain has about 86 billion neurons!',
-                                        'Octopuses have three hearts!',
-                                        'A group of flamingos is called a flamboyance!'
-                                    ];
-                                    const randomFact = facts[Math.floor(Math.random() * facts.length)];
-                                    await this.sock.sendMessage(from, { text: bold('Did you know?') + '\n\n' + randomFact }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'quote': {
-                                    const quotes = [
-                                        'The only way to do great work is to love what you do. - Steve Jobs',
-                                        'Life is what happens when you\'re busy making other plans. - John Lennon',
-                                        'Strive not to be a success, but rather to be of value. - Albert Einstein'
-                                    ];
-                                    const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-                                    await this.sock.sendMessage(from, { text: bold('Quote of the day:') + '\n\n' + randomQuote }, { quoted: msg });
-                                    break;
-                                }
-
-                                case 'calc': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a calculation!') + '\n\n' + italic('Example:') + ' ' + mono('.calc 2+2') }, { quoted: msg });
-                                        break;
-                                    }
-                                    try {
-                                        const result = eval(q);
-                                        await this.sock.sendMessage(from, { text: bold('Result:') + ' ' + result }, { quoted: msg });
-                                    } catch (e) {
-                                        await this.sock.sendMessage(from, { text: bold('Invalid calculation!') }, { quoted: msg });
-                                    }
-                                    break;
-                                }
-
-                                case 'shorturl': {
-                                    if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a URL!') + '\n\n' + italic('Example:') + ' ' + mono('.shorturl https://example.com') }, { quoted: msg });
-                                        break;
-                                    }
-                                    try {
-                                        const res = await axios.get(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(q)}`);
-                                        await this.sock.sendMessage(from, { text: bold('Shortened URL:') + '\n' + mono(res.data) }, { quoted: msg });
-                                    } catch (e) {
-                                        await this.sock.sendMessage(from, { text: bold('Failed to shorten URL!') }, { quoted: msg });
-                                    }
-                                    break;
-                                }
+                                // ================= AI =================
 
                                 case 'ai': {
+
                                     if (!q) {
-                                        await this.sock.sendMessage(from, { text: bold('Please provide a message!') + '\n\n' + italic('Example:') + ' ' + mono('.ai Hello') }, { quoted: msg });
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Please provide a message!'
+                                                        ) +
+                                                        '\n\n' +
+
+                                                        italic(
+                                                            'Example:'
+                                                        ) +
+                                                        ' ' +
+
+                                                        mono(
+                                                            '.ai Hello'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
                                         break;
                                     }
-                                    const aiResponse = await this.getAIResponse(q);
-                                    await this.sock.sendMessage(from, { text: aiResponse }, { quoted: msg });
+
+                                    const aiResponse =
+                                        await this
+                                            .getAIResponse(q);
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    aiResponse
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
                                     break;
                                 }
 
+                                // ================= JOKE =================
+
+                                case 'joke': {
+
+                                    const jokes = [
+
+                                        'Why do programmers prefer dark mode? Because light attracts bugs!',
+
+                                        'Why did the developer go broke? Because he used up all his cache!',
+
+                                        'Why did the computer go to the doctor? It caught a virus!',
+
+                                        'There are only 10 kinds of people: those who understand binary and those who do not.'
+                                    ];
+
+                                    const randomJoke =
+                                        jokes[
+                                            Math.floor(
+                                                Math.random() *
+                                                jokes.length
+                                            )
+                                        ];
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold(
+                                                        "Here's a joke:"
+                                                    ) +
+                                                    '\n\n' +
+                                                    randomJoke
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
+                                    break;
+                                }
+
+                                // ================= FACT =================
+
+                                case 'fact': {
+
+                                    const facts = [
+
+                                        'Honey can remain preserved for a very long time when stored properly.',
+
+                                        'The human brain contains billions of neurons.',
+
+                                        'Octopuses have three hearts.',
+
+                                        'A group of flamingos is called a flamboyance.'
+                                    ];
+
+                                    const randomFact =
+                                        facts[
+                                            Math.floor(
+                                                Math.random() *
+                                                facts.length
+                                            )
+                                        ];
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold(
+                                                        'Did you know?'
+                                                    ) +
+                                                    '\n\n' +
+                                                    randomFact
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
+                                    break;
+                                }
+
+                                // ================= QUOTE =================
+
+                                case 'quote': {
+
+                                    const quotes = [
+
+                                        'Great work comes from consistency and patience.',
+
+                                        'Keep learning, keep building, keep improving.',
+
+                                        'Small progress every day becomes a big result.'
+                                    ];
+
+                                    const randomQuote =
+                                        quotes[
+                                            Math.floor(
+                                                Math.random() *
+                                                quotes.length
+                                            )
+                                        ];
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold(
+                                                        'Quote of the day:'
+                                                    ) +
+                                                    '\n\n' +
+                                                    randomQuote
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
+                                    break;
+                                }
+
+                                // ================= CALCULATOR =================
+
+                                case 'calc': {
+
+                                    if (!q) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Please provide a calculation!'
+                                                        ) +
+                                                        '\n\n' +
+
+                                                        italic(
+                                                            'Example:'
+                                                        ) +
+                                                        ' ' +
+
+                                                        mono(
+                                                            '.calc 2+2'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                        break;
+                                    }
+
+                                    // Only basic mathematical characters
+                                    if (
+                                        !/^[0-9+\-*/().%\s]+$/.test(
+                                            q
+                                        )
+                                    ) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Invalid calculation!'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                        break;
+                                    }
+
+                                    try {
+
+                                        const result =
+                                            Function(
+                                                `"use strict"; return (${q})`
+                                            )();
+
+                                        if (
+                                            typeof result !==
+                                                'number' ||
+                                            !Number.isFinite(
+                                                result
+                                            )
+                                        ) {
+                                            throw new Error(
+                                                'Invalid result'
+                                            );
+                                        }
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Result:'
+                                                        ) +
+                                                        ` ${result}`
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                    } catch (error) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Invalid calculation!'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+                                    }
+
+                                    break;
+                                }
+
+                                // ================= SHORT URL =================
+
+                                case 'shorturl': {
+
+                                    if (!q) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Please provide a URL!'
+                                                        ) +
+                                                        '\n\n' +
+
+                                                        italic(
+                                                            'Example:'
+                                                        ) +
+                                                        ' ' +
+
+                                                        mono(
+                                                            '.shorturl https://example.com'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                        break;
+                                    }
+
+                                    try {
+
+                                        const response =
+                                            await axios.get(
+                                                `https://tinyurl.com/api-create.php?url=${encodeURIComponent(q)}`,
+                                                {
+                                                    timeout: 15000
+                                                }
+                                            );
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Shortened URL:'
+                                                        ) +
+                                                        '\n' +
+                                                        mono(
+                                                            response.data
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                    } catch (error) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Failed to shorten URL!'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+                                    }
+
+                                    break;
+                                }
+
+                                // ================= GROUP INFO =================
+
+                                case 'groupinfo': {
+
+                                    if (!isGroup) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'This command can only be used in a group.'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                        break;
+                                    }
+
+                                    try {
+
+                                        const metadata =
+                                            await this.sock
+                                                .groupMetadata(
+                                                    from
+                                                );
+
+                                        const groupText =
+
+                                            bold(
+                                                'GROUP INFORMATION'
+                                            ) +
+                                            '\n\n' +
+
+                                            italic(
+                                                'Name:'
+                                            ) +
+                                            ` ${metadata.subject}\n` +
+
+                                            italic(
+                                                'Members:'
+                                            ) +
+                                            ` ${metadata.participants.length}\n\n` +
+
+                                            bold(
+                                                '© MA Developers'
+                                            );
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        groupText
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                    } catch (error) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'Unable to get group information.'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+                                    }
+
+                                    break;
+                                }
+
+                                // ================= TAG ALL =================
+
+                                case 'tagall': {
+
+                                    if (!isGroup) {
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        bold(
+                                                            'This command can only be used in a group.'
+                                                        )
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                        break;
+                                    }
+
+                                    try {
+
+                                        const metadata =
+                                            await this.sock
+                                                .groupMetadata(
+                                                    from
+                                                );
+
+                                        const mentions =
+                                            metadata
+                                                .participants
+                                                .map(
+                                                    participant =>
+                                                        participant.id
+                                                );
+
+                                        let tagText =
+                                            bold(
+                                                'GROUP MEMBERS'
+                                            ) +
+                                            '\n\n';
+
+                                        for (
+                                            const member
+                                            of mentions
+                                        ) {
+
+                                            tagText +=
+                                                `@${member.split('@')[0]} `;
+
+                                        }
+
+                                        await this.sock
+                                            .sendMessage(
+                                                from,
+                                                {
+                                                    text:
+                                                        tagText,
+                                                    mentions
+                                                },
+                                                {
+                                                    quoted: msg
+                                                }
+                                            );
+
+                                    } catch (error) {
+
+                                        console.error(
+                                            '[TAGALL ERROR]',
+                                            error.message
+                                        );
+                                    }
+
+                                    break;
+                                }
+
+                                // ================= UNSUPPORTED ATTACK COMMANDS =================
+
+                                case 'crash':
+                                case 'freeze':
+                                case 'lag':
+                                case 'bug':
+                                case 'vibrate':
+                                case 'tornado': {
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold(
+                                                        'Command unavailable'
+                                                    ) +
+                                                    '\n\n' +
+                                                    'This command does not perform attacks or disrupt another user/device.'
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
+                                    break;
+                                }
+
+                                // ================= UNKNOWN =================
+
                                 default: {
-                                    await this.sock.sendMessage(from, { text: bold('Command not found!') + '\n\n' + italic('Type') + ' ' + mono('.menu') + ' ' + italic('to see all commands') }, { quoted: msg });
+
+                                    await this.sock
+                                        .sendMessage(
+                                            from,
+                                            {
+                                                text:
+                                                    bold(
+                                                        'Command not found!'
+                                                    ) +
+                                                    '\n\n' +
+
+                                                    italic(
+                                                        'Type'
+                                                    ) +
+                                                    ' ' +
+
+                                                    mono(
+                                                        '.menu'
+                                                    ) +
+                                                    ' ' +
+
+                                                    italic(
+                                                        'to see all commands.'
+                                                    )
+                                            },
+                                            {
+                                                quoted: msg
+                                            }
+                                        );
+
                                     break;
                                 }
                             }
+
+                        } catch (error) {
+
+                            console.error(
+                                '[MESSAGE PROCESSING ERROR]',
+                                error
+                            );
                         }
-                    } catch (e) {
-                        console.error('Message Processing Error:', e);
                     }
                 }
-            });
+            );
 
-        } catch (err) {
-            this.sendLog(`Initialization failed: ${err.message}. Retrying in 10s...`, 'error');
-            setTimeout(() => this.initialize(), 10000);
+        } catch (error) {
+
+            this.initializing = false;
+
+            this.sendLog(
+                `Initialization failed: ${error.message}. Retrying in 10s...`,
+                'error'
+            );
+
+            setTimeout(() => {
+
+                this.initialize()
+                    .catch(err => {
+
+                        console.error(
+                            `[${this.userId}] Retry error:`,
+                            err.message
+                        );
+                    });
+
+            }, 10000);
+
+            return;
         }
+
+        this.initializing = false;
     }
 }
 
 // =================== LOAD EXISTING SESSIONS ===================
+
 async function loadExistingSessions() {
+
     try {
-        const authDirs = await fs.readdir(AUTH_DIR);
+
+        const authDirs =
+            await fs.readdir(AUTH_DIR);
+
         for (const userId of authDirs) {
-            const authPath = path.join(AUTH_DIR, userId);
-            const stats = await fs.stat(authPath);
-            if (stats.isDirectory()) {
-                const credsFile = path.join(authPath, 'creds.json');
-                if (fs.existsSync(credsFile)) {
-                    console.log(`[MA BOT] Found existing session: ${userId}. Initializing...`);
-                    if (!sessions[userId]) {
-                        sessions[userId] = new BotSession(userId);
-                        sessions[userId].initialize().catch(err => {
-                            console.error(`Failed to auto-initialize session ${userId}:`, err.message);
+
+            const authPath =
+                path.join(
+                    AUTH_DIR,
+                    userId
+                );
+
+            const stats =
+                await fs.stat(authPath);
+
+            if (!stats.isDirectory()) {
+                continue;
+            }
+
+            const credsFile =
+                path.join(
+                    authPath,
+                    'creds.json'
+                );
+
+            if (
+                fs.existsSync(credsFile)
+            ) {
+
+                console.log(
+                    `[MA BOT] Found existing session: ${userId}`
+                );
+
+                if (!sessions[userId]) {
+
+                    sessions[userId] =
+                        new BotSession(userId);
+
+                    sessions[userId]
+                        .initialize()
+                        .catch(error => {
+
+                            console.error(
+                                `Failed to initialize ${userId}:`,
+                                error.message
+                            );
                         });
-                    }
                 }
             }
         }
-    } catch (err) {
-        console.error('[MA BOT] Error loading sessions:', err.message);
+
+    } catch (error) {
+
+        console.error(
+            '[MA BOT] Session loading error:',
+            error.message
+        );
     }
 }
 
 // =================== SOCKET.IO ===================
-io.on('connection', (socket) => {
-    socket.on('set-user', (userId) => {
-        userSockets[userId] = socket.id;
-        if (!sessions[userId]) sessions[userId] = new BotSession(userId);
-        sessions[userId].sendConnectionStatus();
-    });
 
-    socket.on('pair-request', async ({ userId, number }) => {
-        if (sessions[userId]) {
-            sessions[userId].tgChatId = null;
-            await sessions[userId].initialize(number);
-        } else {
-            sessions[userId] = new BotSession(userId);
-            sessions[userId].tgChatId = null;
-            await sessions[userId].initialize(number);
+io.on('connection', socket => {
+
+    console.log(
+        `[SOCKET] Connected: ${socket.id}`
+    );
+
+    // ================= SET USER =================
+
+    socket.on(
+        'set-user',
+        userId => {
+
+            if (!userId) {
+                return;
+            }
+
+            userSockets[userId] =
+                socket.id;
+
+            if (!sessions[userId]) {
+
+                sessions[userId] =
+                    new BotSession(userId);
+            }
+
+            sessions[userId]
+                .sendConnectionStatus();
         }
-    });
+    );
 
-    socket.on('disconnect', () => {
-        for (const [userId, socketId] of Object.entries(userSockets)) {
-            if (socketId === socket.id) {
-                delete userSockets[userId];
-                break;
+    // ================= PAIR REQUEST =================
+
+    socket.on(
+        'pair-request',
+        async ({ userId, number }) => {
+
+            try {
+
+                if (!userId || !number) {
+
+                    socket.emit(
+                        'console',
+                        {
+                            timestamp:
+                                new Date()
+                                    .toLocaleTimeString(),
+                            message:
+                                'User ID and number are required.',
+                            type:
+                                'error'
+                        }
+                    );
+
+                    return;
+                }
+
+                if (!sessions[userId]) {
+
+                    sessions[userId] =
+                        new BotSession(userId);
+                }
+
+                userSockets[userId] =
+                    socket.id;
+
+                sessions[userId]
+                    .tgChatId = null;
+
+                await sessions[userId]
+                    .initialize(number);
+
+            } catch (error) {
+
+                console.error(
+                    '[PAIR REQUEST ERROR]',
+                    error.message
+                );
+
+                socket.emit(
+                    'console',
+                    {
+                        timestamp:
+                            new Date()
+                                .toLocaleTimeString(),
+                        message:
+                            `Pairing failed: ${error.message}`,
+                        type:
+                            'error'
+                    }
+                );
             }
         }
-    });
+    );
+
+    // ================= DISCONNECT =================
+
+    socket.on(
+        'disconnect',
+        () => {
+
+            console.log(
+                `[SOCKET] Disconnected: ${socket.id}`
+            );
+
+            for (
+                const [userId, socketId]
+                of Object.entries(userSockets)
+            ) {
+
+                if (
+                    socketId ===
+                    socket.id
+                ) {
+
+                    delete userSockets[userId];
+
+                    break;
+                }
+            }
+        }
+    );
 });
 
 // =================== START SERVER ===================
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, async () => {
-    console.log(`MA BOT v${settings.version} Server running on port ${PORT}`);
-    console.log(`MA Developers | Muhammad Ayan`);
-    await loadExistingSessions();
-});
+
+const PORT =
+    process.env.PORT || 3000;
+
+server.listen(
+    PORT,
+    async () => {
+
+        console.log(
+            `MA BOT v${settings.version} Server running on port ${PORT}`
+        );
+
+        console.log(
+            'MA Developers | Muhammad Ayan'
+        );
+
+        console.log(
+            `Health: /health`
+        );
+
+        await loadExistingSessions();
+    }
+);
