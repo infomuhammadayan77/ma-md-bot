@@ -23,6 +23,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
 
+// Socket.IO client script serve karein
+app.get('/socket.io/socket.io.js', (req, res) => {
+    res.sendFile(path.join(__dirname, 'node_modules/socket.io/client-dist/socket.io.js'));
+});
+
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
